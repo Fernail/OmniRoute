@@ -26,6 +26,10 @@ import type { FreeAccessState } from "./strictZeroCostFilter";
 import { isStateStaleForReset } from "./subscriptionLadder";
 
 const USAGE_FETCHER_PROVIDER_SET = new Set<string>(USAGE_FETCHER_PROVIDERS);
+const quotaDependencies = {
+  getCachedProviderConnections,
+  getUsageForProvider,
+};
 
 /** Default cache TTL, reused verbatim from the already-shipped
  * `settings.autoRefreshProviderQuotaInterval` (180s default,
@@ -60,6 +64,10 @@ interface CacheEntry {
 // refresh, or by the periodic sweep below; never wholesale.
 const cache = new Map<string, CacheEntry>();
 const inFlight = new Set<string>();
+// Invalidations must also fence off refreshes already in progress. Without a
+// generation check, a delayed successful usage read can repopulate SAFE after
+// a dispatch failure deleted the entry.
+const invalidatedDuringRefresh = new Set<string>();
 let resolveCallCount = 0;
 
 function cacheKey(provider: string, connectionId: string): string {
@@ -136,9 +144,10 @@ async function refresh(provider: string, connectionId: string): Promise<void> {
   const key = cacheKey(provider, connectionId);
   if (inFlight.has(key)) return;
   if (inFlight.size >= MAX_CONCURRENT_REFRESHES) return; // thundering-herd guard — see const doc above
+  invalidatedDuringRefresh.delete(key);
   inFlight.add(key);
   try {
-    const connections = await getCachedProviderConnections();
+    const connections = await quotaDependencies.getCachedProviderConnections();
     const connection = connections.find(
       (c): c is Record<string, unknown> =>
         !!c &&
@@ -147,10 +156,10 @@ async function refresh(provider: string, connectionId: string): Promise<void> {
         (c as Record<string, unknown>).provider === provider
     );
     if (!connection) {
-      cache.delete(key);
+      if (!invalidatedDuringRefresh.has(key)) cache.delete(key);
       return;
     }
-    const usage = await getUsageForProvider(
+    const usage = await quotaDependencies.getUsageForProvider(
       connection as unknown as Parameters<typeof getUsageForProvider>[0],
       { forceRefresh: false }
     );
@@ -172,17 +181,17 @@ async function refresh(provider: string, connectionId: string): Promise<void> {
           : null,
       checkedAt: new Date().toISOString(),
     };
-    cache.set(key, { state, fetchedAtMs: Date.now() });
+    __testing.writeAfterRefresh(key, { state, fetchedAtMs: Date.now() });
   } catch (err) {
     // A failed lookup must never leave a stale SAFE entry behind — drop it so
     // the next read is a clean cache miss (UNKNOWN), not a lucky reuse.
-    cache.delete(key);
+    if (!invalidatedDuringRefresh.has(key)) cache.delete(key);
     log.warn("AUTO", "STRICT_ZERO_COST: usage refresh failed, treating as UNKNOWN", {
       provider,
       err: err instanceof Error ? err.message : String(err),
     });
   } finally {
-    inFlight.delete(key);
+    __testing.finishRefresh(key);
   }
 }
 
@@ -222,7 +231,26 @@ export function resolveFreeAccessState(
  * immediately instead of waiting out the TTL, so the very next candidate-pool
  * build reads a clean cache miss (UNKNOWN) rather than a stale SAFE. */
 export function invalidateFreeAccessState(provider: string, connectionId: string): void {
-  cache.delete(cacheKey(provider, connectionId));
+  __testing.invalidateDuringRefresh(cacheKey(provider, connectionId));
 }
 
-export const __testing = { cache, extractRemainingAllowance, sweepIfDue };
+export const __testing = {
+  cache,
+  inFlight,
+  quotaDependencies,
+  extractRemainingAllowance,
+  sweepIfDue,
+  invalidateDuringRefresh(key: string): void {
+    if (inFlight.has(key)) invalidatedDuringRefresh.add(key);
+    cache.delete(key);
+  },
+  writeAfterRefresh(key: string, entry: CacheEntry): boolean {
+    if (invalidatedDuringRefresh.has(key)) return false;
+    cache.set(key, entry);
+    return true;
+  },
+  finishRefresh(key: string): void {
+    inFlight.delete(key);
+    invalidatedDuringRefresh.delete(key);
+  },
+};
