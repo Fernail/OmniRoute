@@ -31,25 +31,43 @@ function exhState(): FreeAccessState {
   };
 }
 
-const CATALOG = [entry("p-exh", "m"), entry("p-unk", "m")];
+const freeTierEntry = { ...entry("p-tier", "m"), requiredAccessTier: "free" as const };
+const CATALOG = [entry("p-exh", "m"), entry("p-unk", "m"), freeTierEntry];
 
 const OPTS = {
   minRemainingAllowance: 1,
   maxStateAgeMs: 60_000,
   now: () => NOW,
   resolveFreeAccessState: (provider: string, _connectionId: string) =>
-    provider === "p-exh" ? exhState() : undefined,
+    provider === "p-exh"
+      ? exhState()
+      : provider === "p-tier"
+        ? {
+            status: "SAFE" as const,
+            remainingFreeAllowance: 50,
+            resetAt: null,
+            checkedAt: new Date(NOW).toISOString(),
+            accessTiers: { m: "paid" as const },
+          }
+        : undefined,
   catalog: CATALOG,
 };
 
 const POOL: StrictZeroCostCandidate[] = [
   { provider: "p-exh", model: "m", connectionId: "c-exh" },
   { provider: "p-unk", model: "m", connectionId: "c-unk" },
+  { provider: "p-tier", model: "m", connectionId: "c-tier" },
 ];
 
 test("an exhausted quota and a missing reading are counted apart, not merged", () => {
   const result = countStrictExclusions(POOL, OPTS);
-  assert.deepEqual(result, { excluded: 2, noHardStop: 0, exhausted: 1, stateUnknown: 1 });
+  assert.deepEqual(result, {
+    excluded: 3,
+    noHardStop: 0,
+    exhausted: 1,
+    stateUnknown: 1,
+    modelNotFreeTier: 1,
+  });
 });
 
 test("a missing reading is state-unknown while a fresh EXHAUSTED reading is exhausted", () => {
@@ -69,9 +87,9 @@ test("exposing the reason changes nothing about the exclusion decision", () => {
   assert.deepEqual(filterStrictZeroCostCandidates(POOL, { ...OPTS, enabled: true }), []);
 });
 
-test("the pool-log detail surfaces the exhausted and state-unknown split", () => {
+test("the pool-log detail surfaces quota and paid-tier exclusions separately", () => {
   assert.equal(
     describeStrictExclusions(countStrictExclusions(POOL, OPTS)),
-    " (no-hard-stop 0, exhausted 1, state-unknown 1)"
+    " (no-hard-stop 0, exhausted 1, state-unknown 1, model-not-free-tier 1)"
   );
 });
