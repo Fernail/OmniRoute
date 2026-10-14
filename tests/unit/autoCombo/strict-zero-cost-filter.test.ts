@@ -16,6 +16,7 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 
 import {
+  classifyStrictZeroCostCandidate,
   evaluateCandidateConnections,
   filterStrictZeroCostCandidates,
   filterTosAvoidCandidates,
@@ -52,6 +53,11 @@ const KEYLESS = {
 // as a concrete single-connection candidate.
 // 2026-09-02: was groq/llama-3.3-70b-versatile, retired from the Groq free tier on 2026-08-16.
 const QUOTA_SAFE = { provider: "groq", model: "openai/gpt-oss-120b", connectionId: REAL_CONN };
+const XKIRO_FREE = {
+  provider: "xkiro",
+  model: "qwen/qwen3-vl-plus:free",
+  connectionId: REAL_CONN,
+};
 // A real quota-based entry WITHOUT hardStopGuaranteed (agentrouter: one-time-initial,
 // no usage adapter, no documented "no credit card" claim — must never pass).
 const QUOTA_UNGUARANTEED = {
@@ -90,6 +96,9 @@ test("sanity: fixtures exist in the real catalog with the metadata these tests a
     "avoid",
     "opencode must be tos=avoid for the ToS-guard tests below"
   );
+  const xkiroRows = FREE_MODEL_BUDGETS.filter((m) => m.provider === "xkiro");
+  assert.ok(xkiroRows.length > 0);
+  assert.ok(xkiroRows.every((m) => m.requiredAccessTier === "free"));
 });
 
 // 1. keyless SAFE (genuine no-auth candidate) → PASS
@@ -168,6 +177,68 @@ test("UNKNOWN status excludes", () => {
   const state = freshState({ status: "UNKNOWN", remainingFreeAllowance: null });
   assert.deepEqual(
     evaluateCandidateConnections(QUOTA_SAFE, entry, () => state, BASE_OPTIONS),
+    []
+  );
+});
+
+test("xKiro passes only with a fresh positive quota and access_tier=free", () => {
+  const entry = FREE_MODEL_BUDGETS.find(
+    (m) => m.provider === XKIRO_FREE.provider && m.modelId === XKIRO_FREE.model
+  );
+  assert.ok(entry);
+  assert.equal(entry.requiredAccessTier, "free");
+  const state = freshState({
+    remainingFreeAllowance: 40,
+    accessTiers: { [XKIRO_FREE.model]: "free" },
+  });
+  assert.deepEqual(
+    evaluateCandidateConnections(XKIRO_FREE, entry, () => state, BASE_OPTIONS),
+    [REAL_CONN]
+  );
+});
+
+test("xKiro missing or stale access-tier data is UNKNOWN and excluded", () => {
+  const entry = FREE_MODEL_BUDGETS.find(
+    (m) => m.provider === XKIRO_FREE.provider && m.modelId === XKIRO_FREE.model
+  );
+  assert.ok(entry);
+  for (const state of [
+    freshState({ remainingFreeAllowance: 40 }),
+    freshState({
+      remainingFreeAllowance: 40,
+      checkedAt: "2026-08-19T00:00:00.000Z",
+      accessTiers: { [XKIRO_FREE.model]: "free" },
+    }),
+    freshState({
+      status: "UNKNOWN",
+      remainingFreeAllowance: null,
+      accessTiers: { [XKIRO_FREE.model]: "free" },
+    }),
+  ]) {
+    assert.deepEqual(evaluateCandidateConnections(XKIRO_FREE, entry, () => state, BASE_OPTIONS), []);
+  }
+});
+
+test("xKiro paid-tier model and exhausted quota never pass strict auto routing", () => {
+  const entry = FREE_MODEL_BUDGETS.find(
+    (m) => m.provider === XKIRO_FREE.provider && m.modelId === XKIRO_FREE.model
+  );
+  assert.ok(entry);
+  const paidTierState = freshState({
+    remainingFreeAllowance: 40,
+    accessTiers: { [XKIRO_FREE.model]: "paid" },
+  });
+  assert.deepEqual(
+    classifyStrictZeroCostCandidate(XKIRO_FREE, entry, () => paidTierState, BASE_OPTIONS),
+    { outcome: "model-not-free-tier" }
+  );
+  const exhaustedState = freshState({
+    status: "EXHAUSTED",
+    remainingFreeAllowance: 0,
+    accessTiers: { [XKIRO_FREE.model]: "free" },
+  });
+  assert.deepEqual(
+    evaluateCandidateConnections(XKIRO_FREE, entry, () => exhaustedState, BASE_OPTIONS),
     []
   );
 });

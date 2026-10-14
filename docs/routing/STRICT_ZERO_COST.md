@@ -1,7 +1,7 @@
 ---
 title: "STRICT_ZERO_COST"
-version: 3.8.50
-lastUpdated: 2026-08-20
+version: 3.8.52
+lastUpdated: 2026-10-14
 ---
 
 # STRICT_ZERO_COST
@@ -60,6 +60,9 @@ right after `filterPaidOnlyCandidates`):
      evaluated** is `status: "SAFE"`, was checked within
      `settings.autoRefreshProviderQuotaInterval` (default 180s — the existing setting, not a new
      number), and reports `remainingFreeAllowance` above a small safety margin.
+   - If the catalog entry sets `requiredAccessTier`, the same fresh state must contain that
+     model's matching tier from the provider's live model catalog. A missing or malformed tier
+     is `state-unknown`; a different tier is excluded as `model-not-free-tier`.
 4. **`freeType: "discontinued"`** → always excluded.
 
 ## Connection safety (per-connection verification, never per-candidate)
@@ -108,6 +111,29 @@ nothing in the candidate-pool build path ever awaits a network call.
 reason, so the very next pool build reads a clean cache miss instead of a stale `SAFE` entry —
 no waiting out the TTL after a 402/403/quota-exhausted response.
 
+### xKiro free-model admission
+
+xKiro entries in `FREE_MODEL_BUDGETS` retain the curated hard-stop fact, and also set
+`requiredAccessTier: "free"`. The registered xKiro usage adapter reads `GET /v1/usage` and the
+public `GET /v1/models` catalog in one refresh. It validates non-negative integer values and
+`remaining === limit_per_day - used_today`; an uncapped/null allowance is not sufficient. It
+stores the returned `access_tier` by model id in the same cached state. The strict filter only
+admits an xKiro candidate when its exact model id reports `access_tier: "free"`, the daily
+allowance is fresh and above the safety margin, and all existing hard-stop checks pass.
+
+The usage endpoint is documented as free and unmetered. A 401, 403, 429, timeout, invalid
+payload, missing model id, missing tier, or non-free tier never uses the wallet or plan windows:
+the connection is excluded. The router does not substitute a paid xKiro model when a free
+model's quota is exhausted; the candidate pool either routes to another independently strict-
+safe model or is empty. No unauthenticated-provider allowlist entry is involved because xKiro
+uses a normal authenticated provider connection.
+
+Sources: [xKiro usage](https://docs.xkiro.com/api/usage/), [rate limits](https://docs.xkiro.com/api/rate-limits/),
+[model tiers](https://docs.xkiro.com/models/tiers/), and [terms](https://xkiro.com/terms).
+xKiro's terms prohibit reselling or redistributing the service and require compliance with the
+underlying model providers' terms. The catalog keeps xKiro at `tos: "caution"`; `excludeTosAvoid`
+does not imply a legal approval for a particular deployment or workload.
+
 ## ToS guard (independent of economic safety)
 
 `excludeTosAvoid` (default `false`) drops any candidate whose curated `tos` verdict
@@ -131,6 +157,7 @@ leaves the field `null` everywhere and costs nothing.
 | `contradictory-noauth` | A no-auth candidate whose catalog entry is not `keyless`. Fail-closed on inconsistent metadata.               | Fix the catalog entry; the two facts disagree.                                                                                      |
 | `exhausted`            | A fresh reading says the allowance is used up.                                                                | Wait for the reset. This one resolves itself.                                                                                       |
 | `state-unknown`        | No quota reading, or one too old to trust.                                                                    | Go look: the provider may have no usage adapter registered, or the quota fetch is failing.                                          |
+| `model-not-free-tier`  | The provider's fresh catalog reports a different access tier for a model that requires `free`.                | Wait for the provider to restore the free tier, or remove the stale catalog entry.                                                   |
 | `no-connection`        | The candidate carries no account to check at all.                                                             | Not a quota problem: the candidate was built without a connection, so nothing was ever looked up. Check how the pool was assembled. |
 
 The last two are the pair worth separating. An exhausted allowance resets on its own; a reading
@@ -160,7 +187,7 @@ by default for exactly this reason (see "ToS guard" above).
 
 ```json
 PUT /api/settings
-{ "freeAccessPolicy": "strict", "excludeTosAvoid": false }
+{ "freeAccessPolicy": "strict", "excludeTosAvoid": true }
 ```
 
 Both new settings default to their pre-feature values (`"off"` / `false`) — enabling neither

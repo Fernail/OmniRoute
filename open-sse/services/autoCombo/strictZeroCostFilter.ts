@@ -73,6 +73,8 @@ export interface FreeAccessState {
   resetAt: string | null;
   /** When this state was fetched (ISO 8601) — used to detect staleness. */
   checkedAt: string;
+  /** Current provider-reported access tier by model id, captured with this quota reading. */
+  accessTiers?: Record<string, "free" | "paid" | "premium">;
 }
 
 /** A candidate as this module needs to see it — a structural subset of
@@ -139,6 +141,7 @@ export type StrictZeroCostExclusionReason =
   | "contradictory-noauth"
   | "exhausted"
   | "state-unknown"
+  | "model-not-free-tier"
   | "no-connection";
 
 export type StrictZeroCostVerdict =
@@ -160,8 +163,10 @@ export function classifyConnectionState(
   provider: string,
   connectionId: string,
   resolveFreeAccessState: StrictZeroCostOptions["resolveFreeAccessState"],
-  options: Pick<StrictZeroCostOptions, "minRemainingAllowance" | "maxStateAgeMs" | "now">
-): "safe" | "exhausted" | "state-unknown" {
+  options: Pick<StrictZeroCostOptions, "minRemainingAllowance" | "maxStateAgeMs" | "now">,
+  model?: string,
+  requiredAccessTier?: FreeModelBudget["requiredAccessTier"]
+): "safe" | "exhausted" | "state-unknown" | "model-not-free-tier" {
   const state = resolveFreeAccessState(provider, connectionId);
   if (!state) return "state-unknown"; // no usage adapter for this provider, or lookup never ran
 
@@ -172,6 +177,11 @@ export function classifyConnectionState(
 
   if (state.status === "EXHAUSTED") return "exhausted";
   if (state.status !== "SAFE") return "state-unknown";
+  if (requiredAccessTier) {
+    const accessTier = model ? state.accessTiers?.[model] : undefined;
+    if (!accessTier) return "state-unknown";
+    if (accessTier !== requiredAccessTier) return "model-not-free-tier";
+  }
   if (state.remainingFreeAllowance === null) return "state-unknown";
   // A negative threshold would let a negative/garbage reading pass; a caller
   // that genuinely wants "any allowance greater than zero" should pass 0.
@@ -258,19 +268,27 @@ export function classifyStrictZeroCostCandidate(
   // is the absence of one, and the operator needs the fact. Without this rule the
   // reason would depend on the order the connections happen to be listed in.
   let sawExhausted = false;
+  let sawUnknown = false;
+  let sawModelNotFreeTier = false;
   for (const connectionId of candidateConnectionIds) {
     if (connectionId === SYNTHETIC_NOAUTH_CONNECTION_ID) continue; // never reachable here, defensive
     const state = classifyConnectionState(
       candidate.provider,
       connectionId,
       resolveFreeAccessState,
-      options
+      options,
+      candidate.model,
+      budgetEntry.requiredAccessTier
     );
     if (state === "safe") safe.push(connectionId);
     else if (state === "exhausted") sawExhausted = true;
+    else if (state === "model-not-free-tier") sawModelNotFreeTier = true;
+    else sawUnknown = true;
   }
   if (safe.length > 0) return { outcome: "safe", safeConnectionIds: safe };
-  return { outcome: sawExhausted ? "exhausted" : "state-unknown" };
+  if (sawExhausted) return { outcome: "exhausted" };
+  if (sawUnknown) return { outcome: "state-unknown" };
+  return { outcome: sawModelNotFreeTier ? "model-not-free-tier" : "state-unknown" };
 }
 
 /**
@@ -372,11 +390,12 @@ export function filterStrictZeroCostCandidates<T extends StrictZeroCostCandidate
 export function countStrictExclusions<T extends StrictZeroCostCandidate>(
   pool: T[],
   options: StrictZeroCostOptions
-): { excluded: number; noHardStop: number; exhausted: number; stateUnknown: number } {
+): { excluded: number; noHardStop: number; exhausted: number; stateUnknown: number; modelNotFreeTier: number } {
   let excluded = 0;
   let noHardStop = 0;
   let exhausted = 0;
   let stateUnknown = 0;
+  let modelNotFreeTier = 0;
   for (const candidate of pool) {
     const budgetEntry = findBudgetEntry(candidate, options.catalog);
     const verdict = classifyStrictZeroCostCandidate(
@@ -389,9 +408,10 @@ export function countStrictExclusions<T extends StrictZeroCostCandidate>(
     excluded++;
     if (verdict.outcome === "no-hard-stop") noHardStop++;
     if (verdict.outcome === "exhausted") exhausted++;
+    if (verdict.outcome === "model-not-free-tier") modelNotFreeTier++;
     if (verdict.outcome === "state-unknown") stateUnknown++;
   }
-  return { excluded, noHardStop, exhausted, stateUnknown };
+  return { excluded, noHardStop, exhausted, stateUnknown, modelNotFreeTier };
 }
 
 /**
@@ -401,10 +421,10 @@ export function countStrictExclusions<T extends StrictZeroCostCandidate>(
 export function describeStrictExclusions(
   counts: Pick<
     ReturnType<typeof countStrictExclusions>,
-    "noHardStop" | "exhausted" | "stateUnknown"
+    "noHardStop" | "exhausted" | "stateUnknown" | "modelNotFreeTier"
   >
 ): string {
-  return ` (no-hard-stop ${counts.noHardStop}, exhausted ${counts.exhausted}, state-unknown ${counts.stateUnknown})`;
+  return ` (no-hard-stop ${counts.noHardStop}, exhausted ${counts.exhausted}, state-unknown ${counts.stateUnknown}, model-not-free-tier ${counts.modelNotFreeTier})`;
 }
 
 /**

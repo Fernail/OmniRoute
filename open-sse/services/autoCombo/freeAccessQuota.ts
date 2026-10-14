@@ -157,14 +157,18 @@ async function refresh(provider: string, connectionId: string): Promise<void> {
     const remaining = extractRemainingAllowance(usage, {
       isFreeTier: providerHasFreeModels(provider),
     });
+    const usageRecord = usage && typeof usage === "object" ? (usage as Record<string, unknown>) : null;
+    const accessTiers = usageRecord?.accessTiers;
     const state: FreeAccessState = {
       status: remaining === null ? "UNKNOWN" : remaining > 0 ? "SAFE" : "EXHAUSTED",
       remainingFreeAllowance: remaining,
+      ...(accessTiers && typeof accessTiers === "object" && !Array.isArray(accessTiers)
+        ? { accessTiers: accessTiers as FreeAccessState["accessTiers"] }
+        : {}),
       resetAt:
-        usage &&
-        typeof usage === "object" &&
-        typeof (usage as Record<string, unknown>).resetAt === "string"
-          ? ((usage as Record<string, unknown>).resetAt as string)
+        usageRecord &&
+        typeof usageRecord.resetAt === "string"
+          ? usageRecord.resetAt
           : null,
       checkedAt: new Date().toISOString(),
     };

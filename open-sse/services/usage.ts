@@ -93,6 +93,7 @@ import { getSyntxUsage } from "./usage/syntx.ts";
 import { getAgentrouterUsage } from "./usage/agentrouter.ts";
 import { getKilocodeUsage } from "./usage/kilocode.ts";
 import { getChatPlaygroundUsage } from "./usage/chatplayground.ts";
+import { getXkiroUsage } from "./usage/xkiro.ts";
 
 type JsonRecord = Record<string, unknown>;
 type UsageProviderConnection = JsonRecord & {
@@ -287,6 +288,8 @@ export async function getUsageForProvider(
     case "chatplayground":
     case "cpl":
       return await getChatPlaygroundUsage(apiKey || accessToken, providerSpecificData);
+    case "xkiro":
+      return await getXkiroUsage(apiKey || accessToken || "");
     default:
       return { message: `Usage API not implemented for ${provider}` };
   }

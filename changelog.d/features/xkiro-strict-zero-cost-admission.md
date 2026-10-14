@@ -1,0 +1,1 @@
+- **feat(routing):** Strict zero-cost routing now admits authenticated xKiro models only with a fresh positive daily free-token quota and a live `access_tier: "free"` model entry; unknown, invalid, stale, exhausted, and paid-tier states remain excluded.

@@ -18,6 +18,9 @@ export type FreeModelFreeType =
  */
 export type FreeEligibilityGate = "regional-identity";
 
+/** A live provider catalog tier required before a quota-based model can pass STRICT_ZERO_COST. */
+export type FreeModelAccessTier = "free" | "paid" | "premium";
+
 export interface FreeModelBudget {
   provider: string;
   modelId: string;
@@ -47,6 +50,12 @@ export interface FreeModelBudget {
    * `open-sse/services/autoCombo/strictZeroCostFilter.ts`.
    */
   hardStopGuaranteed?: boolean;
+  /**
+   * When set, STRICT_ZERO_COST also requires the provider's fresh runtime model
+   * catalog to report this exact access tier. This is independent of the
+   * curated freeType and hard-stop facts.
+   */
+  requiredAccessTier?: FreeModelAccessTier;
   /**
    * Set when the quota is real and recurring but only reachable after a
    * region-bound identity verification. Affects COUNTING only: the row
