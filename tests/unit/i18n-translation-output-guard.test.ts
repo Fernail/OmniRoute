@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { validateTranslatedChunk } from "../../scripts/i18n/run-translation.mjs";
+import {
+  assertCompleteProposal,
+  validateSection,
+} from "../../scripts/i18n/import-native-translation.mjs";
 
 const SOURCE = [
   "## Web Cookie Providers (2)",
@@ -77,6 +81,55 @@ test("rejects dropped table rows (refresh-5: es PROVIDER_REFERENCE lost 23 rows)
   const r = validateTranslatedChunk(SOURCE, dropped);
   assert.equal(r.problems.length, 1);
   assert.match(r.problems[0], /table rows 3\/4/);
+});
+
+const NATIVE_SOURCE = [
+  "## Candidate classification",
+  "",
+  "Read `requiredAccessTier` in [the catalog](https://example.test/models).",
+  "- Admit only `SAFE` candidates.",
+  "",
+  "```bash",
+  "npm run i18n:check",
+  "```",
+].join("\n");
+const NATIVE_FRENCH = [
+  "## Classification des candidats",
+  "",
+  "Lisez `requiredAccessTier` dans [le catalogue](https://example.test/models).",
+  "- N'admettez que les candidats `SAFE`.",
+  "",
+  "```bash",
+  "npm run i18n:check",
+  "```",
+].join("\n");
+
+test("native import accepts translated prose with unchanged technical Markdown", () => {
+  assert.doesNotThrow(() => validateSection(NATIVE_SOURCE, NATIVE_FRENCH, 1));
+});
+
+test("native import rejects changed URLs, code, and untranslated prose", () => {
+  assert.throws(
+    () => validateSection(NATIVE_SOURCE, NATIVE_FRENCH.replace("example.test", "other.test"), 1),
+    /links differ|urls differ/
+  );
+  assert.throws(
+    () => validateSection(NATIVE_SOURCE, NATIVE_FRENCH.replace("i18n:check", "i18n:run"), 1),
+    /fences differ/
+  );
+  assert.throws(() => validateSection(NATIVE_SOURCE, NATIVE_SOURCE, 1), /untranslated/);
+  assert.throws(() => validateSection(NATIVE_SOURCE, "## Classification des candidats", 1), /incomplete/);
+  assert.throws(() => validateSection(NATIVE_SOURCE, `${NATIVE_FRENCH}\nTODO`, 1), /placeholder/);
+});
+
+test("native import requires every changed section and no extra section", () => {
+  const plan = { translate: [1, 4] };
+  assert.doesNotThrow(() => assertCompleteProposal(plan, { 1: "a", 4: "b" }));
+  assert.throws(() => assertCompleteProposal(plan, { 1: "a" }), /exactly the changed sections/);
+  assert.throws(
+    () => assertCompleteProposal(plan, { 1: "a", 4: "b", 6: "c" }),
+    /exactly the changed sections/
+  );
 });
 
 test("rejects a changed code-fence count", () => {
