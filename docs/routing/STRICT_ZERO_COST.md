@@ -195,7 +195,7 @@ by default for exactly this reason (see "ToS guard" above).
 
 ```json
 PUT /api/settings
-{ "freeAccessPolicy": "strict", "excludeTosAvoid": true }
+{ "freeAccessPolicy": "strict", "excludeTosAvoid": false }
 ```
 
 Both new settings default to their pre-feature values (`"off"` / `false`) — enabling neither
