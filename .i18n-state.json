@@ -82214,7 +82214,7 @@
       }
     },
     "docs/routing/STRICT_ZERO_COST.md": {
-      "source_hash": "0dfc46b285a6839d1603fe85a3179b085cf0cf510d67d2af1921f12cd31bbaff",
+      "source_hash": "53bb6d171c2ff02f0aa165f14a1a793b35010876fa35028ef62f45750502d96c",
       "locales": {
         "ar": {
           "source_hash": "0dfc46b285a6839d1603fe85a3179b085cf0cf510d67d2af1921f12cd31bbaff",
@@ -82272,9 +82272,19 @@
           "updated_at": "2026-10-11T04:53:39.325Z"
         },
         "fr": {
-          "source_hash": "0dfc46b285a6839d1603fe85a3179b085cf0cf510d67d2af1921f12cd31bbaff",
-          "target_hash": "556eab79c61457ad2bb13c2eab88a42734c36ca26395e68976dd5641399c82e3",
-          "updated_at": "2026-10-11T04:53:39.325Z"
+          "source_hash": "53bb6d171c2ff02f0aa165f14a1a793b35010876fa35028ef62f45750502d96c",
+          "target_hash": "58fe222b96fef582d97c5daae1da146db030d0f2893f048505188da692e25b7b",
+          "section_hashes": [
+            "408752ed376a",
+            "acd89ad4ef98",
+            "c4443039271c",
+            "1fdfa659abf6",
+            "e0d30bcd5ba5",
+            "337a2a283235",
+            "ecfed2bf3078",
+            "da32b48282a6"
+          ],
+          "updated_at": "2026-10-15T13:13:39.365Z"
         },
         "fa": {
           "source_hash": "0dfc46b285a6839d1603fe85a3179b085cf0cf510d67d2af1921f12cd31bbaff",

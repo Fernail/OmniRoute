@@ -9,55 +9,26 @@
 > (`open-sse/services/autoCombo/paidModelFilter.ts`, #6512), destinée aux opérateurs qui ont besoin d'une
 > garantie absolue contre TOUTE dépense monétaire supplémentaire, et pas seulement contre ce qui est « documenté comme gratuit ».
 
-## Pourquoi cela existe et pourquoi `hidePaidModels` ne suffit pas à lui seul
+## Pourquoi cette fonctionnalité existe, et pourquoi `hidePaidModels` ne suffit pas
 
-`hidePaidModels` répond à la question « ce modèle est-il actuellement classé comme gratuit dans `FREE_MODEL_BUDGETS` ? » —
-un fait ponctuel du catalogue, vérifié au moyen de `isFreeModel()`/`providerHasFreeModels()`
-(`src/shared/utils/freeModels.ts`). Il ne tient pas compte de deux risques réels :
+`hidePaidModels` répond à la question « ce modèle est-il classé comme gratuit dans `FREE_MODEL_BUDGETS` en ce moment ? » — un fait de catalogue valable à un instant donné, vérifié avec `isFreeModel()`/`providerHasFreeModels()` (`src/shared/utils/freeModels.ts`). Il ne dit rien de deux risques réels :
 
-1. L'allocation d'un niveau gratuit `recurring-*`/`one-time-initial` peut être **épuisée** — le catalogue
-   indique toujours que le modèle est gratuit, mais le compte associé ne dispose plus d'aucune marge.
-2. Dépasser la limite d'un niveau gratuit n'entraîne pas toujours un blocage strict. Certains fournisseurs indiquent
-   explicitement qu'aucun moyen de paiement ne peut être associé (« aucune carte bancaire requise ») ; d'autres
-   ne le précisent pas, et quelques-uns facturent automatiquement au-delà de l'allocation gratuite.
+1. Le quota d'une offre gratuite `recurring-*`/`one-time-initial` peut être **épuisé** : le catalogue indique toujours que le modèle est gratuit, mais le compte associé n'a plus de marge disponible.
+2. Le dépassement d'une offre gratuite n'entraîne pas toujours un arrêt net. Certains fournisseurs indiquent explicitement qu'aucun moyen de paiement ne peut être ajouté (« aucune carte bancaire requise ») ; d'autres ne le précisent pas, et quelques-uns facturent automatiquement une fois le quota gratuit dépassé.
 
-`hidePaidModels` ne peut pas faire la distinction entre ces cas — cela n'a jamais été son objectif. STRICT_ZERO_COST ajoute
-précisément ces deux vérifications, évaluées pour chaque candidat, **avant** le classement par catégorie/niveau et **avant**
-l'envoi — jamais après qu'une requête a déjà été envoyée.
+`hidePaidModels` ne peut pas distinguer ces cas — ce n'était pas son objectif. STRICT_ZERO_COST ajoute ces contrôles, effectués pour chaque candidat, **avant le classement par catégorie/niveau et avant l'envoi** : épuisement du quota, garanties d'arrêt net et, lorsqu'une entrée du catalogue l'exige, niveau d'accès réel du modèle. Ces vérifications ont lieu avant l'envoi d'une requête.
 
 ## Classification des candidats
 
-Pour chaque candidat du pool (`open-sse/services/autoCombo/virtualFactory.ts::buildPreparedPool`,
-juste après `filterPaidOnlyCandidates`) :
+Pour chaque candidat du pool (`open-sse/services/autoCombo/virtualFactory.ts::buildPreparedPool`, juste après `filterPaidOnlyCandidates`) :
 
-1. **Totalement absent de `FREE_MODEL_BUDGETS`** → exclu. Cela couvre les modèles réellement payants ainsi que tout
-   fournisseur/modèle qu'OmniRoute n'a pas encore classé — les nouveaux candidats sont initialement exclus, et non inclus.
-2. **`freeType: "keyless"`** → accepté immédiatement, **mais uniquement pour un candidat qui provient réellement
-   du chemin sans authentification** (`connectionId === SYNTHETIC_NOAUTH_CONNECTION_ID`,
-   `open-sse/services/autoCombo/resilienceCandidateFilter.ts`). Aucune information d'authentification n'existe pour ce
-   candidat ; aucune requête le concernant ne peut donc jamais être facturée — aucune vérification à l'exécution n'est
-   nécessaire ni possible. Le même fournisseur/modèle catalogué comme `keyless`, mais atteint via une **véritable**
-   connexion à la base de données (`connectionId` est un identifiant de connexion réel, ou le candidat comporte
-   `allowedConnectionIds`), ne bénéficie **pas** de ce raccourci — les métadonnées `keyless` décrivent spécifiquement
-   le chemin sans authentification, et non le fournisseur en général, et n'autorisent jamais un compte réel utilisant
-   des informations d'authentification. Un tel candidat passe donc à la vérification 3 comme tous les autres, où il est
-   exclu, sauf si l'entrée du catalogue comporte séparément `hardStopGuaranteed: true` (ce n'est jamais le cas des
-   véritables entrées `keyless` — le raccourci était leur seul moyen de garantir l'absence de risque).
-3. **Tout autre `freeType`** (`recurring-daily`, `recurring-monthly`, `recurring-credit`,
-   `recurring-uncapped`, `one-time-initial`, ainsi que tout futur type que ce module ne traite pas
-   comme un cas particulier) → accepté uniquement si **toutes** les conditions suivantes sont remplies :
-   - `hardStopGuaranteed: true` est défini sur l'entrée du catalogue (`FreeModelBudget.hardStopGuaranteed`,
-     `open-sse/config/freeModelCatalog.ts`) — il s'agit d'un **fait soigneusement vérifié et défini manuellement**
-     concernant les propres conditions publiées par le fournisseur (par exemple, une mention explicite « aucune carte
-     bancaire requise »), jamais déduit de `freeType` ni d'une réponse d'API en temps réel. Une valeur non définie
-     (`undefined`) et `false` sont toutes deux considérées comme « non garanti ».
-   - Un adaptateur d'utilisation existe pour le fournisseur dans `USAGE_FETCHER_PROVIDERS`
-     (`open-sse/services/usage.ts`) — le même registre que celui déjà utilisé par le tableau de bord des quotas et
-     `getUsageForProvider()`. Aucun adaptateur → exclusion permanente, jusqu'à ce qu'un adaptateur soit ajouté.
-   - L'état `FreeAccessState` en temps réel et mis en cache pour **la connexion spécifique effectivement
-     évaluée** est `status: "SAFE"`, a été vérifié au cours de l'intervalle
-     `settings.autoRefreshProviderQuotaInterval` (180 s par défaut — le paramètre existant, et non une nouvelle
-     valeur), et indique une valeur de `remainingFreeAllowance` supérieure à une petite marge de sécurité.
+1. **Absent de `FREE_MODEL_BUDGETS`** → exclu. Cela couvre les modèles réellement payants ainsi que tout fournisseur/modèle qu'OmniRoute n'a pas encore classé : les nouveaux candidats sont exclus par défaut.
+2. **`freeType: "keyless"`** → accepté immédiatement, **mais uniquement pour un candidat effectivement arrivé par le chemin sans authentification** (`connectionId === SYNTHETIC_NOAUTH_CONNECTION_ID`, `open-sse/services/autoCombo/resilienceCandidateFilter.ts`). Ce candidat ne possède aucun identifiant ; aucune requête le concernant ne peut donc être facturée — aucun contrôle à l'exécution n'est nécessaire ni possible. La même paire fournisseur/modèle marquée `keyless` dans le catalogue, mais obtenue au moyen d'une connexion réelle de base de données (`connectionId` est un véritable identifiant de connexion, ou le candidat porte `allowedConnectionIds`), ne bénéficie **pas** de cette exception : les métadonnées `keyless` décrivent spécifiquement le chemin sans authentification, pas le fournisseur en général, et n'autorisent jamais un compte réel avec identifiants. Ce candidat passe à la vérification 3 comme les autres ; il est exclu sauf si l'entrée du catalogue porte séparément `hardStopGuaranteed: true` (les entrées réellement `keyless` ne le font jamais : l'exception était leur seule voie sûre).
+3. **Tout autre `freeType`** (`recurring-daily`, `recurring-monthly`, `recurring-credit`, `recurring-uncapped`, `one-time-initial`, ainsi que tout type futur que ce module ne traite pas spécialement) → accepté uniquement si **toutes** les conditions suivantes sont réunies :
+   - `hardStopGuaranteed: true` est défini dans l'entrée du catalogue (`FreeModelBudget.hardStopGuaranteed`, `open-sse/config/freeModelCatalog.ts`) — il s'agit d'un **fait sélectionné et renseigné manuellement** au sujet des conditions publiées par le fournisseur (par exemple, une déclaration explicite indiquant qu'« aucune carte bancaire n'est requise »), jamais déduit de `freeType` ni d'une réponse d'API en direct. Une valeur absente (`undefined`) et `false` signifient toutes deux « non garanti ».
+   - Un adaptateur d'utilisation existe pour le fournisseur dans `USAGE_FETCHER_PROVIDERS` (`open-sse/services/usage.ts`) — le même registre qui alimente déjà le tableau de bord des quotas et `getUsageForProvider()`. Sans adaptateur, le candidat est exclu de façon permanente jusqu'à l'ajout de cet adaptateur.
+   - L'état `FreeAccessState` réel et mis en cache pour **la connexion précise en cours d'évaluation** est `status: "SAFE"`, a été vérifié pendant l'intervalle `settings.autoRefreshProviderQuotaInterval` (180 s par défaut — le paramètre existant, aucun nouveau nombre), et indique un `remainingFreeAllowance` supérieur à une petite marge de sécurité.
+   - Si l'entrée du catalogue définit `requiredAccessTier`, ce même état récent doit contenir le niveau correspondant au modèle dans le catalogue des modèles en direct du fournisseur. Un niveau absent ou mal formé signifie `state-unknown` ; un niveau différent entraîne l'exclusion `model-not-free-tier`.
 4. **`freeType: "discontinued"`** → toujours exclu.
 
 ## Sécurité des connexions (vérification par connexion, jamais par candidat)
@@ -95,17 +66,19 @@ de données de test injectables, sans modifier le véritable catalogue).
 
 ## Mise en cache des quotas (`open-sse/services/autoCombo/freeAccessQuota.ts`)
 
-Réutilise `getUsageForProvider()` — aucun second système de quotas. Un cache de courte durée, en mémoire
-et limité à la durée de vie du processus est placé devant celui-ci (avec un TTL égal à la valeur par défaut de
-`autoRefreshProviderQuotaInterval`) afin qu’un débit de requêtes à l’échelle de Telegram ne déclenche jamais un appel en direct
-à l’API de facturation pour chaque candidat de chaque requête. Les lectures sont synchrones : une absence dans le cache renvoie
-`undefined` (→ exclusion, rejet par défaut) et déclenche une actualisation en arrière-plan pour la _lecture suivante_ —
-rien dans le chemin de construction du pool de candidats n’attend jamais la fin d’un appel réseau.
+Réutilise `getUsageForProvider()` — aucun deuxième système de quotas. Un cache court, en mémoire et limité à la durée de vie du processus, est placé devant cet appel (TTL égal à la valeur par défaut de `autoRefreshProviderQuotaInterval`) afin qu'un débit de requêtes à l'échelle de Telegram ne déclenche pas un appel à l'API de facturation pour chaque candidat et chaque requête. Les lectures sont synchrones : un défaut de cache renvoie `undefined` (→ exclusion par défaut) et lance une actualisation en arrière-plan pour la lecture _suivante_ — le chemin de construction du pool de candidats n'attend jamais un appel réseau.
 
-`invalidateFreeAccessState(provider, connectionId)` est appelé depuis
-`src/sse/services/auth.ts::markAccountUnavailable()` dès qu’une connexion échoue pour quelque
-raison que ce soit, de sorte que la construction suivante du pool constate immédiatement une absence nette dans le cache plutôt qu’une entrée `SAFE` obsolète —
-sans avoir à attendre l’expiration du TTL après une réponse 402/403/quota épuisé.
+`invalidateFreeAccessState(provider, connectionId)` est appelé depuis `src/sse/services/auth.ts::markAccountUnavailable()` dès qu'une connexion échoue, quelle qu'en soit la raison. La construction suivante du pool constate donc un défaut de cache propre au lieu de lire une entrée `SAFE` périmée — sans attendre l'expiration du TTL après une réponse 402/403 ou un quota épuisé.
+
+La modification d'une identité de connexion persistée ou de ses identifiants (y compris le remplacement d'une clé API sous le même identifiant de connexion) invalide aussi immédiatement son état de quota mis en cache. Une lecture de quota lancée sous l'ancienne identité ne peut pas rétablir cet état à son terme ; le routage attend une nouvelle lecture correspondant à la connexion mise à jour.
+
+### Admission des modèles gratuits xKiro
+
+Les entrées xKiro de `FREE_MODEL_BUDGETS` conservent le fait sélectionné de garantie d'arrêt net et définissent aussi `requiredAccessTier: "free"`. L'adaptateur d'utilisation enregistré lit `GET /v1/usage` et le catalogue public `GET /v1/models` au cours d'une même actualisation. Il valide les valeurs entières non négatives ainsi que l'égalité `remaining === limit_per_day - used_today` ; un quota illimité (null) ne suffit pas. Il stocke le `access_tier` renvoyé pour chaque identifiant de modèle dans le même état mis en cache. Le filtre strict n'admet un candidat xKiro que si l'identifiant exact du modèle indique `access_tier: "free"`, que le quota journalier est récent et supérieur à la marge de sécurité, et que toutes les vérifications d'arrêt net existantes sont satisfaites.
+
+L'endpoint d'utilisation est documenté comme gratuit et non soumis à quota. Une réponse 401, 403 ou 429, un délai d'attente dépassé, une charge utile invalide, un identifiant de modèle ou un niveau manquant, ou un niveau non gratuit n'entraîne jamais l'utilisation du portefeuille ni des fenêtres du forfait : la connexion est exclue. Le routeur ne remplace pas un modèle xKiro gratuit par un modèle xKiro payant lorsque le quota gratuit est épuisé ; le pool de candidats route alors vers un autre modèle dont la sécurité stricte a été vérifiée indépendamment, ou reste vide. Aucune entrée de liste d'autorisation de fournisseur sans authentification n'est nécessaire, car xKiro utilise une connexion fournisseur normale avec authentification.
+
+Sources : [utilisation xKiro](https://docs.xkiro.com/api/usage/), [limites de débit](https://docs.xkiro.com/api/rate-limits/), [niveaux de modèles](https://docs.xkiro.com/models/tiers/) et [conditions](https://xkiro.com/terms). Les conditions de xKiro interdisent la revente ou la redistribution du service et exigent le respect des conditions des fournisseurs de modèles sous-jacents. Le catalogue conserve pour xKiro la valeur `tos: "caution"` ; `excludeTosAvoid` ne constitue pas une approbation juridique pour un déploiement ou un usage donné.
 
 ## Garde-fou des conditions d’utilisation (indépendant de la sécurité économique)
 
@@ -117,43 +90,26 @@ raisons contractuelles, ou être conservé lorsque ce garde-fou est désactivé,
 
 ## Voir ce que le garde-fou exclut
 
-`GET /v1/auto-combo/{channel}/candidates` répertorie tous les candidats, y compris ceux que ce garde-fou
-empêcherait d’être distribués, et chacun comporte `freeAccessExclusion` — `null` lorsque les conditions du garde-fou sont
-satisfaites, sinon la raison. Cette liste fournit des informations ; elle n’applique jamais la politique. Désactiver la politique
-laisse le champ à `null` partout et ne coûte rien.
+`GET /v1/auto-combo/{channel}/candidates` répertorie tous les candidats, y compris ceux que ce garde-fou empêcherait d'être envoyés, et chacun porte `freeAccessExclusion` — `null` lorsque le garde-fou est satisfait, sinon la raison de l'exclusion. Cette liste fournit des informations ; elle n'applique aucune restriction. Désactiver la politique laisse le champ à `null` partout et ne coûte rien.
 
-| `freeAccessExclusion`  | Signification                                                                                                                                   | Mesure à prendre                                                                                                                                                     |
-| :--------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `not-in-catalog`       | La paire fournisseur/modèle est absente de `FREE_MODEL_BUDGETS`.                                                                                | Ajoutez une entrée sélectionnée, ou acceptez que les nouvelles paires soient initialement exclues — c’est le comportement prévu.                                     |
-| `regime-not-free`      | Elle figure dans le catalogue, mais son `freeType` ne correspond pas à un accès gratuit (une offre abandonnée, par exemple).                    | Rien à corriger. Le modèle est payant.                                                                                                                               |
-| `no-hard-stop`         | L’offre est gratuite, mais `hardStopGuaranteed` ne vaut pas `true` ; dépasser le quota pourrait donc déclencher silencieusement la facturation. | Vérifiez les conditions du fournisseur et définissez le marqueur en citant la source dans un commentaire — jamais dans le seul but d’étoffer le catalogue.           |
-| `contradictory-noauth` | Candidat sans authentification dont l’entrée de catalogue n’est pas `keyless`. Rejet par défaut en cas de métadonnées incohérentes.             | Corrigez l’entrée du catalogue ; les deux informations se contredisent.                                                                                              |
-| `exhausted`            | Une mesure récente indique que le quota est épuisé.                                                                                             | Attendez la réinitialisation. Ce problème se résout de lui-même.                                                                                                     |
-| `state-unknown`        | Aucune mesure du quota, ou une mesure trop ancienne pour être fiable.                                                                           | Vérifiez : le fournisseur peut ne disposer d’aucun adaptateur d’utilisation enregistré, ou la récupération du quota peut échouer.                                    |
-| `no-connection`        | Le candidat ne comporte aucun compte à vérifier.                                                                                                | Ce n’est pas un problème de quota : le candidat a été créé sans connexion, donc aucune recherche n’a jamais été effectuée. Vérifiez comment le pool a été constitué. |
+| `freeAccessExclusion`  | Signification                                                                                                                               | Mesure à prendre                                                                                                                                        |
+| :--------------------- | :------------------------------------------------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `not-in-catalog`       | La paire fournisseur/modèle est absente de `FREE_MODEL_BUDGETS`.                                                                            | Ajouter une entrée sélectionnée au catalogue ou accepter que les nouvelles paires soient exclues par défaut — c'est le comportement prévu.              |
+| `regime-not-free`      | L'entrée existe dans le catalogue, mais son `freeType` ne donne pas accès gratuitement (par exemple, niveau interrompu).                    | Aucune correction à apporter. Le modèle est payant.                                                                                                     |
+| `no-hard-stop`         | L'accès est gratuit, mais `hardStopGuaranteed` n'est pas `true` ; le dépassement du quota peut donc déclencher une facturation silencieuse. | Vérifier les conditions du fournisseur et définir le champ avec la source en commentaire — sans élargir le catalogue.                                   |
+| `contradictory-noauth` | Un candidat sans authentification dont l'entrée du catalogue n'est pas `keyless`. Échec fermé en cas de métadonnées incohérentes.           | Corriger l'entrée du catalogue : les deux faits se contredisent.                                                                                        |
+| `exhausted`            | Une lecture récente indique que le quota est épuisé.                                                                                        | Attendre sa réinitialisation. Cette situation se résout d'elle-même.                                                                                    |
+| `state-unknown`        | Aucune lecture de quota, ou lecture trop ancienne pour être fiable.                                                                         | Vérifier : l'adaptateur d'utilisation du fournisseur est peut-être absent du registre, ou la récupération du quota échoue.                              |
+| `model-not-free-tier`  | Le catalogue récent du fournisseur signale un autre niveau d'accès pour un modèle qui exige `free`.                                         | Attendre que le fournisseur rétablisse le niveau gratuit ou retirer l'entrée périmée du catalogue.                                                      |
+| `no-connection`        | Le candidat ne porte aucun compte à vérifier.                                                                                               | Ce n'est pas un problème de quota : le candidat a été construit sans connexion, donc aucune vérification n'a eu lieu. Vérifier la construction du pool. |
 
-Il est important de distinguer les deux derniers cas. Un quota épuisé se réinitialise de lui-même ; une mesure
-qui n’arrive jamais signifie que la recherche elle-même est défaillante. Jusqu’à présent, les deux semblaient
-identiques de l’extérieur — le candidat disparaissait simplement.
+Un quota épuisé se réinitialise automatiquement ; une lecture absente ou périmée signifie que la vérification elle-même est indisponible, et un niveau non gratuit signifie que le fournisseur classe actuellement ce modèle précis comme payant. La distinction entre ces résultats indique à l'opérateur s'il doit attendre la réinitialisation du quota, examiner la vérification ou retirer une entrée périmée du catalogue.
 
-**Une lacune subsiste, et elle est volontaire.** `excludeTosAvoid` supprime encore les candidats avant la
-construction de la liste ; un modèle sélectionné avec `tos: "avoid"` en est donc absent sans qu’aucune raison ne soit indiquée — la même
-invisibilité que cette section vient de supprimer pour le garde-fou de coût nul. La combler également impose de décider ce
-qu’une exclusion liée aux conditions d’utilisation doit signaler, ce qui constitue une question distincte de la sécurité économique ; cette page signale
-la lacune au lieu de prétendre qu’elle n’existe pas.
+**Une lacune subsiste, volontairement.** `excludeTosAvoid` retire toujours les candidats avant la création de la liste ; un modèle sélectionné avec `tos: "avoid"` est donc absent, sans explication — la même invisibilité que cette section vient de supprimer pour le garde-fou de coût nul. La combler exige de décider ce que doit signaler une exclusion liée aux conditions d'utilisation. C'est une question distincte de la sécurité économique ; cette page décrit la lacune au lieu de la passer sous silence.
 
-Pour une comparaison hors ligne avant/après, `npx tsx scripts/ad-hoc/dry-run-strict-zero-cost.ts` fonctionne toujours
-avec la sortie des candidats d’une instance active ; le script lit le véritable `connectionId` de chaque candidat et
-teste donc également le chemin de sécurisation des connexions. Les candidats sans clé doivent arriver avec le
-`connectionId` synthétique sans authentification, jamais avec une véritable connexion. Le chemin automatique sans clé intégré actuel est OpenCode Free ; le nombre exact de candidats
-dépend toujours de la découverte des modèles en temps réel et doit être mesuré sur le déploiement cible plutôt que
-copié depuis une exécution antérieure. Un candidat `recurring-*` n’est accepté que s’il dispose à la fois d’un
-adaptateur d’utilisation enregistré et de `hardStopGuaranteed: true` ; les métadonnées incomplètes entraînent toujours un rejet par défaut.
+Pour une comparaison hors ligne avant/après, `npx tsx scripts/ad-hoc/dry-run-strict-zero-cost.ts` fonctionne toujours avec la sortie des candidats d'une instance en direct ; le script lit le véritable `connectionId` de chaque candidat et exerce donc aussi le chemin de sécurité des connexions. Les candidats keyless doivent arriver avec le `connectionId` synthétique sans authentification, jamais avec une connexion réelle. Le chemin automatique sans authentification intégré est actuellement OpenCode Free ; le nombre exact de candidats dépend toujours de la découverte des modèles en direct et doit être mesuré sur le déploiement cible au lieu de reprendre un ancien résultat. Un candidat `recurring-*` n'est accepté qu'avec un adaptateur d'utilisation enregistré, `hardStopGuaranteed: true` et, si `requiredAccessTier` est défini, des données récentes correspondant au niveau réel exact de ce modèle. Des métadonnées incomplètes ou incompatibles entraînent une exclusion par défaut.
 
-Avec `excludeTosAvoid: true`, tout candidat sélectionné comme `tos: "avoid"` est supprimé. OpenCode Free
-porte actuellement ce verdict ; activer le garde-fou peut donc vider le pool de candidats sans clé restant d’un déploiement.
-Il s’agit d’un compromis attendu lors de l’activation du garde-fou des conditions d’utilisation, et non d’un bug : le garde-fou vaut `false`
-par défaut précisément pour cette raison (voir « Garde-fou des conditions d’utilisation » ci-dessus).
+Avec `excludeTosAvoid: true`, tous les candidats sélectionnés avec `tos: "avoid"` sont retirés. OpenCode Free porte actuellement ce verdict ; activer ce garde-fou peut donc vider le pool sans authentification qui reste disponible dans un déploiement. Ce compromis est attendu lorsque le garde-fou lié aux conditions d'utilisation est activé, et non un bogue : sa valeur par défaut est `false` précisément pour cette raison (voir « Garde-fou lié aux conditions d'utilisation » ci-dessus).
 
 ## Activation
 
