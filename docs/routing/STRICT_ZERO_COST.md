@@ -23,9 +23,10 @@ a point-in-time catalog fact, checked via `isFreeModel()`/`providerHasFreeModels
    payment method can ever be attached ("no credit card required"); others don't say, and a
    handful bill automatically past the free allowance.
 
-`hidePaidModels` cannot distinguish these — it was never meant to. STRICT_ZERO_COST adds exactly
-these two checks, evaluated per candidate, **before** category/tier ranking and **before**
-dispatch — never after a request has already gone out.
+`hidePaidModels` cannot distinguish these — it was never meant to. STRICT_ZERO_COST adds these
+checks, evaluated per candidate, **before** category/tier ranking and **before** dispatch:
+allowance exhaustion, hard-stop guarantees, and — when a catalog entry requires it — the
+model's live access tier. These checks run before a request goes out.
 
 ## Candidate classification
 
@@ -181,8 +182,9 @@ against a live instance's candidates output; it reads each candidate's real `con
 also exercises the connection-safety path. Keyless candidates must arrive with the synthetic
 no-auth `connectionId`, never a real connection. The current built-in keyless auto path is OpenCode Free; exact candidate counts
 still depend on live model discovery and should be measured on the target deployment instead of
-copied from an older run. A `recurring-*` candidate passes only when it has both a registered
-usage adapter and `hardStopGuaranteed: true`; incomplete metadata remains fail-closed.
+copied from an older run. A `recurring-*` candidate passes only with a registered usage adapter,
+`hardStopGuaranteed: true`, and, when `requiredAccessTier` is set, matching fresh live tier data
+for that exact model. Incomplete or mismatched metadata remains fail-closed.
 
 With `excludeTosAvoid: true`, every candidate curated as `tos: "avoid"` is removed. OpenCode Free
 currently carries that verdict, so enabling the guard can empty a deployment's remaining keyless
