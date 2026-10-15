@@ -311,6 +311,23 @@ export function isConnectionRuntimeStateUpdate(data: Record<string, unknown>): b
 
 export type UpdateOpts = { skipModelCatalog?: boolean };
 
+const QUOTA_IDENTITY_FIELDS = new Set([
+  "apiKey",
+  "accessToken",
+  "refreshToken",
+  "idToken",
+  "authType",
+  "provider",
+  "providerSpecificData",
+]);
+const quotaIdentityChangeListeners = new Set<(id: string) => void>();
+
+/** Let quota caches invalidate a connection without importing routing into the DB layer. */
+export function onConnectionQuotaIdentityChange(listener: (id: string) => void): () => void {
+  quotaIdentityChangeListeners.add(listener);
+  return () => quotaIdentityChangeListeners.delete(listener);
+}
+
 /**
  * Cache invalidation for `updateProviderConnection()`: runtime-state-only
  * updates (cooldowns, error fields) keep the connection read caches fresh
@@ -323,6 +340,9 @@ export function invalidateConnectionUpdate(
   data: Record<string, unknown>,
   opts?: UpdateOpts
 ): void {
+  if (Object.keys(data).some((field) => QUOTA_IDENTITY_FIELDS.has(field))) {
+    for (const listener of quotaIdentityChangeListeners) listener(id);
+  }
   // #13389: a caller that vouches its write is catalog-irrelevant (OAuth token
   // rotation — credentials only, see updateProviderCredentials) opts in explicitly.
   if (opts?.skipModelCatalog || isConnectionRuntimeStateUpdate(data)) {

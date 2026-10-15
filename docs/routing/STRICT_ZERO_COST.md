@@ -111,6 +111,11 @@ nothing in the candidate-pool build path ever awaits a network call.
 reason, so the very next pool build reads a clean cache miss instead of a stale `SAFE` entry —
 no waiting out the TTL after a 402/403/quota-exhausted response.
 
+A persisted connection identity or credential edit (including an API-key replacement
+under the same connection ID) also evicts its cached quota state immediately. A
+quota read started under the old identity cannot restore that state when it
+finishes; routing waits for a fresh reading under the updated connection.
+
 ### xKiro free-model admission
 
 xKiro entries in `FREE_MODEL_BUDGETS` retain the curated hard-stop fact, and also set

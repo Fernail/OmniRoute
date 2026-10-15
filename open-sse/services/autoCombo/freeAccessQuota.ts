@@ -19,7 +19,7 @@ import {
   USAGE_FETCHER_PROVIDERS,
   type UsageFetcherProvider,
 } from "./../usage.ts";
-import { getCachedProviderConnections } from "@/lib/db/readCache";
+import { getCachedProviderConnections, onConnectionQuotaIdentityChange } from "@/lib/db/readCache";
 import { providerHasFreeModels } from "@/shared/utils/freeModels";
 import { defaultLogger as log } from "@omniroute/open-sse/utils/logger";
 import type { FreeAccessState } from "./strictZeroCostFilter";
@@ -233,6 +233,14 @@ export function resolveFreeAccessState(
 export function invalidateFreeAccessState(provider: string, connectionId: string): void {
   __testing.invalidateDuringRefresh(cacheKey(provider, connectionId));
 }
+
+// A credential edit can leave the same connection ID pointing at another
+// account. Drop every provider-specific quota snapshot and fence old reads.
+onConnectionQuotaIdentityChange((connectionId) => {
+  for (const provider of USAGE_FETCHER_PROVIDERS) {
+    invalidateFreeAccessState(provider, connectionId);
+  }
+});
 
 export const __testing = {
   cache,
