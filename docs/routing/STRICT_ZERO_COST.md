@@ -160,9 +160,10 @@ leaves the field `null` everywhere and costs nothing.
 | `model-not-free-tier`  | The provider's fresh catalog reports a different access tier for a model that requires `free`.                | Wait for the provider to restore the free tier, or remove the stale catalog entry.                                                   |
 | `no-connection`        | The candidate carries no account to check at all.                                                             | Not a quota problem: the candidate was built without a connection, so nothing was ever looked up. Check how the pool was assembled. |
 
-The last two are the pair worth separating. An exhausted allowance resets on its own; a reading
-that never arrives means the lookup itself is broken, and until now both looked identical from
-outside — the candidate simply vanished.
+An exhausted allowance resets on its own; a missing or stale reading means the lookup itself is
+unavailable, and a non-free tier means the provider currently classifies that exact model as paid.
+Keeping these outcomes separate tells the operator whether to wait for a quota reset, investigate
+the lookup, or remove a stale catalog entry.
 
 **One gap remains, and it is deliberate.** `excludeTosAvoid` still removes candidates before the
 listing is built, so a model curated `tos: "avoid"` is absent with no reason given — the same

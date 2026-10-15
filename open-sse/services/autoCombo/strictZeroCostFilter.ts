@@ -309,6 +309,7 @@ export type StrictFilterDiagnosis = {
   noHardStop: number;
   exhausted: number;
   stateUnknown: number;
+  modelNotFreeTier: number;
   total: number;
 };
 
