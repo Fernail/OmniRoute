@@ -3,13 +3,16 @@
  * only for providers with a documented free tier; anything else stays unknown.
  */
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, test } from "node:test";
 import {
   __testing,
   resolveFreeAccessState,
 } from "../../open-sse/services/autoCombo/freeAccessQuota.ts";
 import { invalidateConnectionUpdate } from "../../src/lib/db/readCache.ts";
+import { resetDbInstance } from "../../src/lib/db/core.ts";
 import { createProviderConnection, updateProviderConnection } from "../../src/lib/db/providers.ts";
+
+test.after(() => resetDbInstance());
 
 describe("extractRemainingAllowance unlimited gate", () => {
   it("reports full headroom for an all-unlimited free-tier quota", () => {
